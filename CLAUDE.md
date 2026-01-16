@@ -26,6 +26,14 @@ cd claude_spotify
 pip install -r requirements.txt
 ```
 
+## Sample Data
+
+To try this tool without your own Spotify data, you can request access to sample streaming history files:
+
+**[Request Access to Sample Data (Google Drive)](https://drive.google.com/drive/folders/1yB5oq_ShbqKvWiGMYh6RqCM4114jm1sa?usp=sharing)**
+
+Once approved, download the JSON files and place them in the `spotify_data/` folder.
+
 ## Data Format
 
 Place your Spotify extended streaming history JSON files in `spotify_data/`. The files should contain records with:
