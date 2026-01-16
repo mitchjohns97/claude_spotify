@@ -12,13 +12,103 @@ def find_json_files(data_dir: Path) -> list[Path]:
     return list(data_dir.rglob("*.json"))
 
 
-def load_streaming_history(data_dirs: Optional[list[Path] | Path] = None) -> pd.DataFrame:
+def get_people_folders(data_dir: Optional[Path] = None) -> list[str]:
+    """
+    Get list of people (folder names) in the data directory.
+
+    Args:
+        data_dir: Path to spotify_data folder. Defaults to project root.
+
+    Returns:
+        List of folder names representing people.
+    """
+    if data_dir is None:
+        data_dir = Path(__file__).parent.parent / "spotify_data"
+    else:
+        data_dir = Path(data_dir)
+
+    if not data_dir.exists():
+        return []
+
+    # Return subfolders that contain JSON files
+    people = []
+    for item in sorted(data_dir.iterdir()):
+        if item.is_dir():
+            json_files = list(item.glob("*.json"))
+            if json_files:
+                people.append(item.name)
+
+    return people
+
+
+def load_all_people(
+    data_dir: Optional[Path] = None,
+    enrich: bool = False,
+    cache_dir: Optional[Path] = None,
+) -> pd.DataFrame:
+    """
+    Load streaming history from all people folders with person column.
+
+    Args:
+        data_dir: Path to spotify_data folder containing person subfolders.
+        enrich: Whether to enrich with API cache data.
+        cache_dir: Path to cache directory for enrichment.
+
+    Returns:
+        DataFrame with all streaming records and 'person' column.
+    """
+    if data_dir is None:
+        data_dir = Path(__file__).parent.parent / "spotify_data"
+    else:
+        data_dir = Path(data_dir)
+
+    people = get_people_folders(data_dir)
+    if not people:
+        raise FileNotFoundError(f"No people folders found in {data_dir}")
+
+    all_dfs = []
+    for person in people:
+        person_dir = data_dir / person
+        try:
+            person_df = load_streaming_history(
+                person_dir,
+                add_person=False,  # We'll add it manually
+                enrich=False,  # Enrich after combining
+            )
+            person_df["person"] = person
+            all_dfs.append(person_df)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"Warning: Could not load data for {person}: {e}")
+            continue
+
+    if not all_dfs:
+        raise ValueError("No valid streaming data found for any person")
+
+    combined = pd.concat(all_dfs, ignore_index=True)
+    combined = combined.sort_values("timestamp").reset_index(drop=True)
+
+    if enrich:
+        from src.enrichment import enrich_streaming_data
+        combined = enrich_streaming_data(combined, cache_dir=cache_dir)
+
+    return combined
+
+
+def load_streaming_history(
+    data_dirs: Optional[list[Path] | Path] = None,
+    add_person: bool = True,
+    enrich: bool = False,
+    cache_dir: Optional[Path] = None,
+) -> pd.DataFrame:
     """
     Load all Spotify streaming history JSON files and combine into a DataFrame.
 
     Args:
         data_dirs: Path(s) to spotify_data folder(s). Can be a single path or list of paths.
                    Defaults to spotify_data/ in project root.
+        add_person: Whether to add 'person' column based on parent folder name.
+        enrich: Whether to enrich with API cache data.
+        cache_dir: Path to cache directory for enrichment.
 
     Returns:
         DataFrame with all streaming records.
@@ -31,24 +121,36 @@ def load_streaming_history(data_dirs: Optional[list[Path] | Path] = None) -> pd.
     else:
         data_dirs = [Path(d) for d in data_dirs]
 
-    # Collect JSON files from all paths
-    json_files = []
+    # Collect JSON files from all paths, tracking source folder
+    json_files_with_source = []
     for data_dir in data_dirs:
         if not data_dir.exists():
             print(f"Warning: {data_dir} not found, skipping")
             continue
         found_files = find_json_files(data_dir)
-        json_files.extend(found_files)
+        for f in found_files:
+            # Determine person from folder structure
+            # If file is directly in data_dir, use data_dir name
+            # If file is in a subfolder, use subfolder name
+            relative = f.relative_to(data_dir)
+            if len(relative.parts) > 1:
+                person = relative.parts[0]
+            else:
+                person = data_dir.name
+            json_files_with_source.append((f, person))
 
-    if not json_files:
+    if not json_files_with_source:
         raise FileNotFoundError(f"No JSON files found in any of the specified directories: {data_dirs}")
 
     all_records = []
-    for json_file in json_files:
+    for json_file, person in json_files_with_source:
         try:
             with open(json_file, "r", encoding="utf-8") as f:
                 records = json.load(f)
                 if isinstance(records, list):
+                    if add_person:
+                        for record in records:
+                            record["_person"] = person
                     all_records.extend(records)
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             print(f"Warning: Could not parse {json_file}: {e}")
@@ -59,6 +161,15 @@ def load_streaming_history(data_dirs: Optional[list[Path] | Path] = None) -> pd.
 
     df = pd.DataFrame(all_records)
     df = clean_dataframe(df)
+
+    # Move _person to person column
+    if add_person and "_person" in df.columns:
+        df["person"] = df["_person"]
+        df = df.drop(columns=["_person"])
+
+    if enrich:
+        from src.enrichment import enrich_streaming_data
+        df = enrich_streaming_data(df, cache_dir=cache_dir)
 
     return df
 

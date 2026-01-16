@@ -33,3 +33,6 @@ ENV/
 .DS_Store
 .AppleDouble
 .LSOverride
+
+# Spotify API cache
+spotify_cache/
