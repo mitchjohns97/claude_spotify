@@ -2,9 +2,58 @@
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, BinaryIO
 
 import pandas as pd
+
+
+def load_from_uploaded_files(
+    uploaded_files: list[BinaryIO],
+    person_name: str = "You",
+) -> pd.DataFrame:
+    """
+    Load streaming history from uploaded file objects (for Streamlit file_uploader).
+
+    Args:
+        uploaded_files: List of file-like objects containing JSON data.
+        person_name: Name to use for the 'person' column.
+
+    Returns:
+        DataFrame with streaming records.
+    """
+    all_records = []
+
+    for uploaded_file in uploaded_files:
+        try:
+            # Read and parse JSON
+            content = uploaded_file.read()
+            if isinstance(content, bytes):
+                content = content.decode("utf-8")
+            records = json.loads(content)
+
+            if isinstance(records, list):
+                for record in records:
+                    record["_person"] = person_name
+                all_records.extend(records)
+
+            # Reset file position for potential re-reads
+            uploaded_file.seek(0)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            print(f"Warning: Could not parse {uploaded_file.name}: {e}")
+            continue
+
+    if not all_records:
+        raise ValueError("No valid streaming records found in uploaded files")
+
+    df = pd.DataFrame(all_records)
+    df = clean_dataframe(df)
+
+    # Move _person to person column
+    if "_person" in df.columns:
+        df["person"] = df["_person"]
+        df = df.drop(columns=["_person"])
+
+    return df
 
 
 def find_json_files(data_dir: Path) -> list[Path]:

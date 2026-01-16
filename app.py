@@ -14,7 +14,7 @@ import altair as alt
 from pathlib import Path
 from datetime import date
 
-from src.loader import load_streaming_history, get_data_summary, get_people_folders
+from src.loader import load_streaming_history, get_data_summary, get_people_folders, load_from_uploaded_files
 from src import analysis
 from src import comparison
 from src.enrichment import enrich_streaming_data, get_enrichment_stats
@@ -46,33 +46,111 @@ def format_hours(hours: float) -> str:
     return f"{hours:,.1f} hours"
 
 
-# Sidebar - Data Source Selection
+def show_upload_page():
+    """Show the data upload page when no data is loaded."""
+    st.title("🎵 Spotify Streaming Analyzer")
+    st.markdown("---")
+
+    st.markdown("""
+    ### Welcome!
+
+    This app analyzes your Spotify Extended Streaming History to reveal insights about your listening habits.
+
+    **Features:**
+    - See your top artists, tracks, and albums over time
+    - Discover listening patterns by time of day and day of week
+    - Compare music taste with friends
+    - Generate your own "Spotify Wrapped" for any time period
+
+    ---
+
+    ### Get Started
+
+    **Step 1:** Request your Extended Streaming History from Spotify:
+    1. Go to [Spotify Privacy Settings](https://www.spotify.com/account/privacy/)
+    2. Scroll to "Download your data"
+    3. Select **Extended streaming history**
+    4. Wait for the email (can take up to 30 days)
+
+    **Step 2:** Upload your JSON files below:
+    """)
+
+    # File uploader
+    st.subheader("Upload Your Data")
+
+    person_name = st.text_input(
+        "Your name (for labeling):",
+        value="You",
+        help="This name will appear in charts and comparisons"
+    )
+
+    uploaded_files = st.file_uploader(
+        "Select your Spotify JSON files:",
+        type=["json"],
+        accept_multiple_files=True,
+        help="Upload the Streaming_History_Audio_*.json files from your Spotify data export"
+    )
+
+    if uploaded_files:
+        if st.button("🚀 Analyze My Data", type="primary"):
+            try:
+                with st.spinner("Loading and processing your data..."):
+                    df = load_from_uploaded_files(uploaded_files, person_name=person_name)
+                    st.session_state.df = df
+                    st.session_state.summary = get_data_summary(df)
+                    st.session_state.data_source = "uploaded"
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error loading data: {e}")
+
+    st.markdown("---")
+    st.markdown("""
+    **Don't have your data yet?**
+
+    You can [request sample data](https://drive.google.com/drive/folders/1yB5oq_ShbqKvWiGMYh6RqCM4114jm1sa?usp=sharing)
+    to try out the app while you wait for your own export.
+    """)
+
+
+# Sidebar
 st.sidebar.title("Spotify Analyzer")
 st.sidebar.markdown("---")
 
-default_path = str(Path(__file__).parent / "spotify_data")
-data_paths_text = st.sidebar.text_area(
-    "Data folder paths (one per line):",
-    value=default_path,
-    height=100
-)
+# Check for local data first (for development)
+default_path = Path(__file__).parent / "spotify_data"
+has_local_data = default_path.exists() and any(default_path.rglob("*.json"))
 
-if st.sidebar.button("Reload Data"):
+# Data source selection
+if has_local_data:
+    data_source = st.sidebar.radio(
+        "Data Source:",
+        ["Local Files", "Upload Files"],
+        help="Choose where to load data from"
+    )
+else:
+    data_source = "Upload Files"
+
+# Reset data button
+if st.sidebar.button("🔄 Reset / Load New Data"):
     st.session_state.pop("df", None)
     st.session_state.pop("summary", None)
+    st.session_state.pop("data_source", None)
+    st.rerun()
 
-# Load data
+# Load data based on source
 if "df" not in st.session_state:
-    try:
-        with st.spinner("Loading and enriching data..."):
-            data_paths = data_paths_text.strip().split("\n")
-            st.session_state.df = load_data(data_paths, enrich=True)
-            st.session_state.summary = get_data_summary(st.session_state.df)
-    except FileNotFoundError as e:
-        st.error(f"Error: {e}")
-        st.stop()
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
+    if data_source == "Local Files" and has_local_data:
+        try:
+            with st.spinner("Loading data from local files..."):
+                st.session_state.df = load_data([str(default_path)], enrich=True)
+                st.session_state.summary = get_data_summary(st.session_state.df)
+                st.session_state.data_source = "local"
+        except Exception as e:
+            st.error(f"Error loading local data: {e}")
+            st.stop()
+    else:
+        # Show upload page
+        show_upload_page()
         st.stop()
 
 df = st.session_state.df
